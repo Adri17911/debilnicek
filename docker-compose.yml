@@ -1,0 +1,29 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: sqlite:////data/todos.db
+    volumes:
+      - ./data:/data
+    ports:
+      - "5000:5000"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+  ingest:
+    build: ./backend
+    command: ["python", "email_ingest.py"]
+    environment:
+      BACKEND_URL: http://backend:5000
+      SMTP_HOST: 0.0.0.0
+      SMTP_PORT: 8025
+      # INGEST_RECIPIENT: "todo@your-domain.com"
+    ports:
+      - "8025:8025"
+    depends_on:
+      - backend
