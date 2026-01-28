@@ -18,7 +18,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { motion } from "framer-motion";
-import { authApi, authStorage, categoryApi, taskApi } from "./api";
+import { authApi, authStorage, categoryApi, configApi, taskApi } from "./api";
 import type { Category, Task } from "./types";
 
 const priorities = [
@@ -332,6 +332,14 @@ export default function App() {
     currentPassword: "",
     confirm: "",
   });
+  const [smtpForm, setSmtpForm] = useState({
+    host: "",
+    port: "",
+    user: "",
+    password: "",
+    from: "",
+  });
+  const [smtpLoading, setSmtpLoading] = useState(false);
 
   const swipeThreshold = 80;
   const maxSwipe = 140;
@@ -452,6 +460,32 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
     loadData();
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    setProfileForm({
+      email: authUser.email,
+      username: authUser.username,
+      currentPassword: "",
+    });
+    // Load SMTP config when account is available
+    setSmtpLoading(true);
+    configApi.smtp
+      .get()
+      .then((data) => {
+        setSmtpForm({
+          host: data.host ?? "",
+          port: data.port != null ? String(data.port) : "",
+          user: data.user ?? "",
+          password: "",
+          from: data.from ?? "",
+        });
+      })
+      .catch(() => {
+        // ignore load errors, stay with defaults
+      })
+      .finally(() => setSmtpLoading(false));
   }, [authUser]);
 
   useEffect(() => {
@@ -818,6 +852,42 @@ export default function App() {
     } catch (caught) {
       setAuthMessage(formatError(caught, "Password update failed."));
       pushNotification("Password update failed.", "error");
+    }
+  };
+
+  const handleSmtpSave = async () => {
+    if (!smtpForm.host.trim() || !smtpForm.from.trim()) {
+      pushNotification("Host and From are required.", "error");
+      return;
+    }
+    setSmtpLoading(true);
+    try {
+      const payload: {
+        host: string;
+        port?: number;
+        user?: string;
+        password?: string;
+        from: string;
+      } = {
+        host: smtpForm.host.trim(),
+        from: smtpForm.from.trim(),
+      };
+      if (smtpForm.port.trim()) {
+        payload.port = Number(smtpForm.port.trim());
+      }
+      if (smtpForm.user.trim()) {
+        payload.user = smtpForm.user.trim();
+      }
+      if (smtpForm.password !== "") {
+        payload.password = smtpForm.password;
+      }
+      await configApi.smtp.update(payload);
+      pushNotification("SMTP settings saved.", "success");
+    } catch (caught) {
+      setAuthMessage(formatError(caught, "Failed to save SMTP settings."));
+      pushNotification("Failed to save SMTP settings.", "error");
+    } finally {
+      setSmtpLoading(false);
     }
   };
 
@@ -1495,6 +1565,67 @@ export default function App() {
               >
                 Change password
               </button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold">Email server (SMTP)</h3>
+                <p className="text-xs text-slate-500">
+                  Configure how FocusFlow sends verification and reset emails.
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <input
+                  className="liquid-input rounded-2xl px-4 py-2 text-sm focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
+                  placeholder="SMTP host"
+                  value={smtpForm.host}
+                  onChange={(event) =>
+                    setSmtpForm((prev) => ({ ...prev, host: event.target.value }))
+                  }
+                />
+                <div className="flex gap-2">
+                  <input
+                    className="liquid-input w-24 rounded-2xl px-3 py-2 text-sm focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
+                    placeholder="Port"
+                    value={smtpForm.port}
+                    onChange={(event) =>
+                      setSmtpForm((prev) => ({ ...prev, port: event.target.value }))
+                    }
+                  />
+                  <input
+                    className="liquid-input flex-1 rounded-2xl px-3 py-2 text-sm focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
+                    placeholder="From (e.g. FocusFlow <no-reply@example.com>)"
+                    value={smtpForm.from}
+                    onChange={(event) =>
+                      setSmtpForm((prev) => ({ ...prev, from: event.target.value }))
+                    }
+                  />
+                </div>
+                <input
+                  className="liquid-input rounded-2xl px-4 py-2 text-sm focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
+                  placeholder="Username (optional)"
+                  value={smtpForm.user}
+                  onChange={(event) =>
+                    setSmtpForm((prev) => ({ ...prev, user: event.target.value }))
+                  }
+                />
+                <input
+                  type="password"
+                  className="liquid-input rounded-2xl px-4 py-2 text-sm focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
+                  placeholder="Password (leave blank to keep existing)"
+                  value={smtpForm.password}
+                  onChange={(event) =>
+                    setSmtpForm((prev) => ({ ...prev, password: event.target.value }))
+                  }
+                />
+                <button
+                  onClick={handleSmtpSave}
+                  disabled={smtpLoading}
+                  className="liquid-accent liquid-sheen mt-1 rounded-2xl px-5 py-2 text-sm font-semibold transition hover:-translate-y-0.5 hover:shadow-xl disabled:opacity-60"
+                >
+                  {smtpLoading ? "Saving…" : "Save SMTP settings"}
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">

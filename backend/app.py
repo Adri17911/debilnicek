@@ -1,6 +1,7 @@
 import os
 import secrets
 import smtplib
+import json
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 
@@ -111,6 +112,12 @@ class Session(db.Model):
     token = db.Column(db.String(120), unique=True, nullable=False)
     expires_at = db.Column(db.DateTime, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class AppConfig(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(80), unique=True, nullable=False)
+    value = db.Column(db.Text, nullable=False)
 
 
 def parse_datetime(value):
@@ -346,6 +353,66 @@ def create_app():
         Session.query.filter_by(user_id=user.id).delete()
         db.session.commit()
         return jsonify({"status": "password_reset"})
+
+    @app.get("/api/config/smtp")
+    def get_smtp_config():
+        user = require_auth()
+        if not user:
+            return jsonify({"error": "unauthorized"}), 401
+        stored = AppConfig.query.filter_by(key="smtp").first()
+        stored_value = json.loads(stored.value) if stored else {}
+        effective = get_smtp_settings(include_password=False)
+        # Prefer stored values where present
+        effective.update({k: v for k, v in stored_value.items() if k != "password"})
+        return jsonify(effective)
+
+    @app.patch("/api/config/smtp")
+    def update_smtp_config():
+        user = require_auth()
+        if not user:
+            return jsonify({"error": "unauthorized"}), 401
+        payload = request.get_json(force=True) or {}
+        host = (payload.get("host") or "").strip()
+        from_addr = (payload.get("from") or "").strip()
+        port = payload.get("port")
+        user_name = (payload.get("user") or "").strip()
+        password = payload.get("password")
+
+        if not host or not from_addr:
+            return jsonify({"error": "host and from are required"}), 400
+
+        stored = AppConfig.query.filter_by(key="smtp").first()
+        data = {}
+        if stored:
+            try:
+                data = json.loads(stored.value)
+            except Exception:
+                data = {}
+
+        data.update(
+            {
+                "host": host,
+                "from": from_addr,
+            }
+        )
+        if port is not None:
+            try:
+                data["port"] = int(port)
+            except ValueError:
+                return jsonify({"error": "port must be a number"}), 400
+        if user_name:
+            data["user"] = user_name
+        if password is not None:
+            # Empty string clears the password
+            data["password"] = password
+
+        if not stored:
+            stored = AppConfig(key="smtp", value=json.dumps(data))
+            db.session.add(stored)
+        else:
+            stored.value = json.dumps(data)
+        db.session.commit()
+        return jsonify({"status": "updated"})
 
     @app.get("/api/categories")
     def list_categories():
@@ -694,12 +761,34 @@ def build_verification_link(token):
     return f"{base_url}/?verify={token}"
 
 
+def get_smtp_settings(include_password: bool = True):
+    # Start with environment defaults
+    settings = {
+        "host": os.getenv("SMTP_HOST"),
+        "port": int(os.getenv("SMTP_PORT", "587")),
+        "user": os.getenv("SMTP_USER"),
+        "password": os.getenv("SMTP_PASSWORD"),
+        "from": os.getenv("SMTP_FROM", "FocusFlow <no-reply@focusflow.local>"),
+    }
+    stored = AppConfig.query.filter_by(key="smtp").first()
+    if stored:
+        try:
+            data = json.loads(stored.value)
+            settings.update({k: v for k, v in data.items() if v is not None})
+        except Exception:
+            pass
+    if not include_password:
+        settings.pop("password", None)
+    return settings
+
+
 def send_verification_email(user, token):
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-    smtp_from = os.getenv("SMTP_FROM", "FocusFlow <no-reply@focusflow.local>")
+    settings = get_smtp_settings()
+    smtp_host = settings.get("host")
+    smtp_port = int(settings.get("port") or 587)
+    smtp_user = settings.get("user")
+    smtp_password = settings.get("password")
+    smtp_from = settings.get("from") or "FocusFlow <no-reply@focusflow.local>"
     verification_link = build_verification_link(token)
     subject = "Verify your FocusFlow account"
     body = f"Hello {user.username},\\n\\nVerify your account: {verification_link}\\n\\n"
@@ -727,11 +816,12 @@ def build_reset_link(token):
 
 
 def send_reset_email(user, token):
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-    smtp_from = os.getenv("SMTP_FROM", "FocusFlow <no-reply@focusflow.local>")
+    settings = get_smtp_settings()
+    smtp_host = settings.get("host")
+    smtp_port = int(settings.get("port") or 587)
+    smtp_user = settings.get("user")
+    smtp_password = settings.get("password")
+    smtp_from = settings.get("from") or "FocusFlow <no-reply@focusflow.local>"
     reset_link = build_reset_link(token)
     subject = "Reset your FocusFlow password"
     body = (

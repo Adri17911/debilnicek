@@ -92,3 +92,26 @@ export const categoryApi = {
       body: JSON.stringify(payload),
     }),
 };
+
+export const configApi = {
+  smtp: {
+    get: () =>
+      api<{
+        host?: string;
+        port?: number;
+        user?: string;
+        from?: string;
+      }>("/config/smtp"),
+    update: (payload: {
+      host: string;
+      port?: number;
+      user?: string;
+      password?: string;
+      from: string;
+    }) =>
+      api<{ status: string }>("/config/smtp", {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+  },
+};
