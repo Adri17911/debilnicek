@@ -3,8 +3,12 @@ import type { Category, Task } from "./types";
 const API_BASE = "/api";
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = localStorage.getItem("focusflow-token");
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     ...options,
   });
   if (!response.ok) {
@@ -12,6 +16,53 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
   return response.json() as Promise<T>;
 }
+
+export const authStorage = {
+  setToken: (token: string) => localStorage.setItem("focusflow-token", token),
+  clearToken: () => localStorage.removeItem("focusflow-token"),
+  getToken: () => localStorage.getItem("focusflow-token"),
+};
+
+export const authApi = {
+  register: (payload: { email: string; username: string; password: string }) =>
+    api<{ status: string; verification_link?: string }>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  login: (payload: { identifier: string; password: string }) =>
+    api<{ token: string; user: { id: number; email: string; username: string } }>(
+      "/auth/login",
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  verify: (token: string) =>
+    api<{ status: string }>(`/auth/verify?token=${encodeURIComponent(token)}`),
+  resend: (payload: { email: string }) =>
+    api<{ status: string; verification_link?: string }>("/auth/resend", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  me: () => api<{ id: number; email: string; username: string }>("/auth/me"),
+  logout: () => api<{ status: string }>("/auth/logout", { method: "POST" }),
+  updateProfile: (payload: {
+    email: string;
+    username: string;
+    current_password: string;
+  }) =>
+    api<{ status: string; user: { id: number; email: string; username: string }; verification_link?: string }>(
+      "/auth/profile",
+      { method: "PATCH", body: JSON.stringify(payload) }
+    ),
+  changePassword: (payload: { current_password: string; new_password: string }) =>
+    api<{ status: string }>("/auth/password", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteAccount: (payload: { current_password: string }) =>
+    api<{ status: string }>("/auth/account", {
+      method: "DELETE",
+      body: JSON.stringify(payload),
+    }),
+};
 
 export const taskApi = {
   list: () => api<Task[]>("/tasks"),

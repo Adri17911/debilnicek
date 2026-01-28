@@ -12,6 +12,7 @@ export type Task = {
   priority: 1 | 2 | 3;
   due_at?: string | null;
   estimated_minutes?: number | null;
+  actual_minutes?: number | null;
   is_focus: boolean;
   focus_rank?: number | null;
   source: string;
