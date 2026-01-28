@@ -298,6 +298,7 @@ export default function App() {
     username: string;
   } | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authStep, setAuthStep] = useState<"auth" | "forgot" | "reset">("auth");
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authLink, setAuthLink] = useState<string | null>(null);
   const [showAccount, setShowAccount] = useState(false);
@@ -311,6 +312,11 @@ export default function App() {
     username: "",
     identifier: "",
     password: "",
+  });
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [resetPasswordForm, setResetPasswordForm] = useState({
+    password: "",
+    confirm: "",
   });
   const [profileForm, setProfileForm] = useState({
     email: "",
@@ -553,6 +559,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("reset");
+    if (!token) return;
+    setResetToken(token);
+    setAuthStep("reset");
+    params.delete("reset");
+    window.history.replaceState({}, "", `${window.location.pathname}`);
+  }, []);
+
+  useEffect(() => {
     if (!activeTimerId) return;
     const start = timerStartRef.current ?? Date.now();
     timerStartRef.current = start;
@@ -674,6 +690,50 @@ export default function App() {
     } catch (caught) {
       setAuthMessage(formatError(caught, "Login failed."));
       pushNotification("Login failed.", "error");
+    }
+  };
+
+  const handleResetRequest = async () => {
+    setAuthMessage(null);
+    setAuthLink(null);
+    try {
+      await authApi.resetRequest({ email: authForm.email });
+      setAuthMessage("If that email exists, a reset link was sent.");
+      pushNotification("Reset link sent (if account exists).", "success");
+    } catch (caught) {
+      setAuthMessage(formatError(caught, "Failed to send reset link."));
+      pushNotification("Failed to send reset link.", "error");
+    }
+  };
+
+  const handleResetConfirm = async () => {
+    if (!resetToken) {
+      setAuthMessage("Reset link is missing or invalid.");
+      return;
+    }
+    if (resetPasswordForm.password.length < 8) {
+      setAuthMessage("Password must be at least 8 characters.");
+      return;
+    }
+    if (resetPasswordForm.password !== resetPasswordForm.confirm) {
+      setAuthMessage("Passwords do not match.");
+      return;
+    }
+    setAuthMessage(null);
+    try {
+      await authApi.resetConfirm({
+        token: resetToken,
+        password: resetPasswordForm.password,
+      });
+      setResetToken(null);
+      setResetPasswordForm({ password: "", confirm: "" });
+      setAuthStep("auth");
+      setAuthMode("login");
+      setAuthMessage("Password updated. You can now log in.");
+      pushNotification("Password reset. Please sign in.", "success");
+    } catch (caught) {
+      setAuthMessage(formatError(caught, "Password reset failed."));
+      pushNotification("Password reset failed.", "error");
     }
   };
 
@@ -1097,36 +1157,110 @@ export default function App() {
           >
             <h1 className="text-3xl font-semibold tracking-tight">FocusFlow</h1>
             <p className="mt-2 text-slate-500">
-              {authMode === "login"
+              {authStep === "reset"
+                ? "Set a new password for your account."
+                : authStep === "forgot"
+                ? "Enter your email and we'll send you a reset link."
+                : authMode === "login"
                 ? "Welcome back. Sign in to continue."
                 : "Create your account to get started."}
             </p>
 
-            <div className="mt-6 flex rounded-full border border-slate-200 bg-white/70 p-1 text-xs shadow-sm">
-              <button
-                onClick={() => setAuthMode("login")}
-                className={`rounded-full px-3 py-1 transition ${
-                  authMode === "login"
-                    ? "bg-indigo-600 text-white shadow-lg ring-2 ring-indigo-300/60"
-                    : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                Login
-              </button>
-              <button
-                onClick={() => setAuthMode("register")}
-                className={`rounded-full px-3 py-1 transition ${
-                  authMode === "register"
-                    ? "bg-indigo-600 text-white shadow-lg ring-2 ring-indigo-300/60"
-                    : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                Register
-              </button>
-            </div>
+            {authStep === "auth" ? (
+              <div className="mt-6 flex rounded-full border border-slate-200 bg-white/70 p-1 text-xs shadow-sm">
+                <button
+                  onClick={() => setAuthMode("login")}
+                  className={`rounded-full px-3 py-1 transition ${
+                    authMode === "login"
+                      ? "bg-indigo-600 text-white shadow-lg ring-2 ring-indigo-300/60"
+                      : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  Login
+                </button>
+                <button
+                  onClick={() => setAuthMode("register")}
+                  className={`rounded-full px-3 py-1 transition ${
+                    authMode === "register"
+                      ? "bg-indigo-600 text-white shadow-lg ring-2 ring-indigo-300/60"
+                      : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  Register
+                </button>
+              </div>
+            ) : null}
 
             <div className="mt-6 grid gap-4">
-              {authMode === "register" ? (
+              {authStep === "forgot" ? (
+                <>
+                  <input
+                    className="liquid-input rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
+                    placeholder="Email"
+                    value={authForm.email}
+                    onChange={(event) =>
+                      setAuthForm((prev) => ({ ...prev, email: event.target.value }))
+                    }
+                  />
+                  <button
+                    onClick={handleResetRequest}
+                    className="liquid-accent liquid-sheen rounded-2xl px-5 py-3 text-base font-semibold transition hover:-translate-y-0.5 hover:shadow-xl"
+                  >
+                    Send reset link
+                  </button>
+                  <button
+                    onClick={() => {
+                      setAuthStep("auth");
+                      setAuthMode("login");
+                    }}
+                    className="text-xs text-slate-500 transition hover:text-slate-700"
+                  >
+                    Back to login
+                  </button>
+                </>
+              ) : authStep === "reset" ? (
+                <>
+                  <input
+                    type="password"
+                    className="liquid-input rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
+                    placeholder="New password"
+                    value={resetPasswordForm.password}
+                    onChange={(event) =>
+                      setResetPasswordForm((prev) => ({
+                        ...prev,
+                        password: event.target.value,
+                      }))
+                    }
+                  />
+                  <input
+                    type="password"
+                    className="liquid-input rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
+                    placeholder="Confirm password"
+                    value={resetPasswordForm.confirm}
+                    onChange={(event) =>
+                      setResetPasswordForm((prev) => ({
+                        ...prev,
+                        confirm: event.target.value,
+                      }))
+                    }
+                  />
+                  <button
+                    onClick={handleResetConfirm}
+                    className="liquid-accent liquid-sheen rounded-2xl px-5 py-3 text-base font-semibold transition hover:-translate-y-0.5 hover:shadow-xl"
+                  >
+                    Set new password
+                  </button>
+                  <button
+                    onClick={() => {
+                      setAuthStep("auth");
+                      setAuthMode("login");
+                    }}
+                    className="text-xs text-slate-500 transition hover:text-slate-700"
+                  >
+                    Back to login
+                  </button>
+                </>
+              ) : authMode === "register" ? (
                 <>
                   <input
                     className="liquid-input rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-4 focus:ring-indigo-200/60"
@@ -1187,6 +1321,15 @@ export default function App() {
                     className="liquid-accent liquid-sheen rounded-2xl px-5 py-3 text-base font-semibold transition hover:-translate-y-0.5 hover:shadow-xl"
                   >
                     Sign in
+                  </button>
+                  <button
+                    onClick={() => {
+                      setAuthStep("forgot");
+                      setAuthMode("login");
+                    }}
+                    className="text-xs text-slate-500 transition hover:text-slate-700"
+                  >
+                    Forgot password?
                   </button>
                 </>
               )}

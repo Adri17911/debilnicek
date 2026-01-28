@@ -57,6 +57,16 @@ export const authApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  resetRequest: (payload: { email: string }) =>
+    api<{ status: string; reset_link?: string }>("/auth/reset-request", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  resetConfirm: (payload: { token: string; password: string }) =>
+    api<{ status: string }>("/auth/reset", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   deleteAccount: (payload: { current_password: string }) =>
     api<{ status: string }>("/auth/account", {
       method: "DELETE",

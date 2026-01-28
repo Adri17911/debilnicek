@@ -88,6 +88,8 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     verification_token = db.Column(db.String(120), nullable=True)
     verified_at = db.Column(db.DateTime, nullable=True)
+    reset_token = db.Column(db.String(120), nullable=True)
+    reset_expires_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -300,6 +302,50 @@ def create_app():
         db.session.delete(user)
         db.session.commit()
         return jsonify({"status": "deleted"})
+
+    @app.post("/api/auth/reset-request")
+    def reset_request():
+        payload = request.get_json(force=True)
+        email = (payload.get("email") or "").strip().lower()
+        if not email:
+            return jsonify({"error": "email is required"}), 400
+        user = User.query.filter_by(email=email).first()
+        # To avoid leaking which emails exist, always return 200
+        if not user:
+            return jsonify({"status": "reset_sent"}), 200
+        token = secrets.token_urlsafe(32)
+        user.reset_token = token
+        user.reset_expires_at = datetime.utcnow() + timedelta(hours=1)
+        db.session.commit()
+        send_reset_email(user, token)
+        response = {"status": "reset_sent"}
+        if os.getenv("APP_ENV", "development") != "production":
+            response["reset_link"] = build_reset_link(token)
+        return jsonify(response)
+
+    @app.post("/api/auth/reset")
+    def reset_password():
+        payload = request.get_json(force=True)
+        token = (payload.get("token") or "").strip()
+        new_password = payload.get("password") or ""
+        if not token or not new_password:
+            return jsonify({"error": "token and password are required"}), 400
+        user = User.query.filter_by(reset_token=token).first()
+        if (
+            not user
+            or not user.reset_expires_at
+            or user.reset_expires_at < datetime.utcnow()
+        ):
+            return jsonify({"error": "invalid or expired token"}), 400
+        if len(new_password) < 8:
+            return jsonify({"error": "password too short"}), 400
+        user.password_hash = generate_password_hash(new_password)
+        user.reset_token = None
+        user.reset_expires_at = None
+        # Invalidate existing sessions
+        Session.query.filter_by(user_id=user.id).delete()
+        db.session.commit()
+        return jsonify({"status": "password_reset"})
 
     @app.get("/api/categories")
     def list_categories():
@@ -529,6 +575,7 @@ def ensure_task_columns():
         db.session.commit()
 
 def ensure_auth_columns():
+    # Category user_id / unique index migration
     inspector = db.session.execute(text("PRAGMA table_info(category)")).fetchall()
     columns = {row[1] for row in inspector}
     if "user_id" not in columns:
@@ -577,6 +624,17 @@ def ensure_auth_columns():
             )
         )
         db.session.commit()
+
+    # User password reset columns
+    user_inspector = db.session.execute(text("PRAGMA table_info(user)")).fetchall()
+    user_columns = {row[1] for row in user_inspector}
+    if "reset_token" not in user_columns:
+        db.session.execute(text("ALTER TABLE user ADD COLUMN reset_token VARCHAR(120)"))
+    if "reset_expires_at" not in user_columns:
+        db.session.execute(
+            text("ALTER TABLE user ADD COLUMN reset_expires_at DATETIME")
+        )
+    db.session.commit()
 
 
 def resolve_category(payload, user_id):
@@ -648,6 +706,43 @@ def send_verification_email(user, token):
 
     if not smtp_host:
         print(f"[verification] {verification_link}")
+        return
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = smtp_from
+    message["To"] = user.email
+    message.set_content(body)
+
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.starttls()
+        if smtp_user and smtp_password:
+            server.login(smtp_user, smtp_password)
+        server.send_message(message)
+
+
+def build_reset_link(token):
+    base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8080")
+    return f"{base_url}/?reset={token}"
+
+
+def send_reset_email(user, token):
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    smtp_from = os.getenv("SMTP_FROM", "FocusFlow <no-reply@focusflow.local>")
+    reset_link = build_reset_link(token)
+    subject = "Reset your FocusFlow password"
+    body = (
+        f"Hello {user.username},\n\n"
+        f"We received a request to reset your password.\n\n"
+        f"Reset your password: {reset_link}\n\n"
+        "If you didn't request this, you can ignore this email.\n"
+    )
+
+    if not smtp_host:
+        print(f"[password-reset] {reset_link}")
         return
 
     message = EmailMessage()
